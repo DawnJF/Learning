@@ -1,5 +1,6 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppo_continuous_actionpy
 import os
+import sys
 import random
 import time
 from dataclasses import dataclass
@@ -9,9 +10,13 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from tqdm import tqdm
 import tyro
 from torch.distributions.normal import Normal
 from torch.utils.tensorboard import SummaryWriter
+
+sys.path.append(os.getcwd())
+from src.utils import logging_args, setup_logging
 
 
 @dataclass
@@ -25,8 +30,7 @@ class Args:
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
 
-    save_model: bool = True
-    """whether to save model into the `runs/{run_name}` folder"""
+    output_dir: str = "outputs/ppo"
 
     hf_entity: str = ""
     """the user or org name of the model repository from the Hugging Face Hub"""
@@ -35,7 +39,7 @@ class Args:
     # env_id: str = "HalfCheetah-v4"
     env_id: str = "Hopper-v4"
     """the id of the environment"""
-    total_timesteps: int = 1000000
+    total_timesteps: int = 5000000
     """total timesteps of the experiments"""
     learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
@@ -158,9 +162,16 @@ def train():
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
 
-    writer = SummaryWriter(f"runs/{run_name}")
+    time_str = time.strftime("%Y-%m-%d-%H-%M-%S")
+    run_name = f"{args.env_id}__{args.exp_name}__{time_str}"
+    args.output_dir = os.path.join(args.output_dir, run_name)
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    setup_logging(args.output_dir)
+    logging_args(args)
+
+    writer = SummaryWriter(args.output_dir)
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s"
@@ -205,7 +216,7 @@ def train():
     next_obs = torch.Tensor(next_obs).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
 
-    for iteration in range(1, args.num_iterations + 1):
+    for iteration in tqdm(range(1, args.num_iterations + 1)):
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / args.num_iterations
@@ -357,10 +368,9 @@ def train():
             "charts/SPS", int(global_step / (time.time() - start_time)), global_step
         )
 
-    if args.save_model:
-        model_path = f"runs/{run_name}/{args.exp_name}.cleanrl_model"
-        torch.save(agent.state_dict(), model_path)
-        print(f"model saved to {model_path}")
+    model_path = os.path.join(args.output_dir, "final.pth")
+    torch.save(agent.state_dict(), model_path)
+    print(f"model saved to {model_path}")
 
     envs.close()
     writer.close()
@@ -368,6 +378,7 @@ def train():
 
 def eval():
     path = "runs/HalfCheetah-v4__ppo__1__1762329773/ppo.cleanrl_model"
+    path = "runs/Hopper-v4__ppo__1__1762336668/ppo.cleanrl_model"
 
     args = Args()
 
