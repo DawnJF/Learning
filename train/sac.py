@@ -27,7 +27,8 @@ class Args:
     render: bool = False
 
     # Algorithm specific arguments
-    env_id: str = "Hopper-v4"
+    env_id: str = "HalfCheetah-v4"
+    # env_id: str = "Hopper-v4"
     """the environment id of the task"""
     load_checkpoint: str = None
     """path to load checkpoint from"""
@@ -104,10 +105,12 @@ def load_checkpoint(checkpoint_path, actor, device):
     return checkpoint["global_step"], checkpoint["args"]
 
 
-def evaluate_agent(load_checkpoint_path, num_episodes=5, max_steps=4000):
+def evaluate_agent(load_checkpoint_path, num_episodes=5, max_steps=4000, render=False):
     """Evaluate the agent and optionally render the environment"""
 
-    env = make_env("Hopper-v4", render=False)
+    args = Args()
+
+    env = make_env(args.env_id, render=render)
     action_space = env.action_space
     observation_space = env.observation_space
     print(f"action_space: {action_space}")
@@ -409,10 +412,18 @@ def test():
     """
 
     path = "outputs/sac/Hopper-v4__q_discount_999__2025-10-27-16-25-52/checkpoint_120000.pt"
+    path = "outputs/sac/HalfCheetah-v4__q_discount_999__2025-11-17-10-23-21/checkpoint_99999.pt"
 
     evaluate_agent(path, 5)
 
 
+def test_render():
+    path = "outputs/sac/HalfCheetah-v4__q_discount_999__2025-11-17-10-23-21/checkpoint_99999.pt"
+
+    evaluate_agent(path, 2, render=True)
+
+
 if __name__ == "__main__":
     # test()
-    train()
+    # train()
+    test_render()

@@ -14,6 +14,16 @@ from src.net.thinking import Thinking
 from src.net.jepa_thinking import JepaThinking
 
 
+def logging_args(args, name=""):
+    # 格式化打印参数，提高可读性
+    logging.info("=" * 50)
+    logging.info(f"{name} Parameters:")
+    logging.info("=" * 50)
+    for key, value in vars(args).items():
+        logging.info(f"  {key:20}: {value}")
+    logging.info("=" * 50)
+
+
 def setup_logging(out_dir):
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)

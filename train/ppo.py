@@ -3,6 +3,7 @@ import os
 import sys
 import random
 import time
+import logging
 from dataclasses import dataclass
 
 import gymnasium as gym
@@ -30,7 +31,7 @@ class Args:
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
 
-    output_dir: str = "outputs/ppo"
+    output_dir: str = "outputs/ppo_test"
 
     hf_entity: str = ""
     """the user or org name of the model repository from the Hugging Face Hub"""
@@ -39,7 +40,7 @@ class Args:
     # env_id: str = "HalfCheetah-v4"
     env_id: str = "Hopper-v4"
     """the id of the environment"""
-    total_timesteps: int = 5000000
+    total_timesteps: int = 2000000
     """total timesteps of the experiments"""
     learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
@@ -49,7 +50,7 @@ class Args:
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
-    gamma: float = 0.99
+    gamma: float = 0.999
     """the discount factor gamma"""
     gae_lambda: float = 0.95
     """the lambda for the general advantage estimation"""
@@ -72,6 +73,14 @@ class Args:
     target_kl: float = None
     """the target KL divergence threshold"""
 
+    # Checkpoint arguments
+    save_interval: int = 100
+    """save checkpoint every N iterations"""
+    log_interval: int = 20
+    """log training metrics every N iterations"""
+    resume_from: str = None
+    """path to checkpoint to resume training from"""
+
     # to be filled in runtime
     batch_size: int = 0
     """the batch size (computed in runtime)"""
@@ -93,10 +102,13 @@ def make_env(env_id, idx, gamma, render=False):
         )  # deal with dm_control's Dict observation space
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env = gym.wrappers.ClipAction(env)
-        env = gym.wrappers.NormalizeObservation(env)
+        # env = gym.wrappers.NormalizeObservation(env)
         # env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
+        """
+        Hopper-v4 用 NormalizeReward 后曲线特别好, 是reward hack的原因, 一直原地保持直立不动
+        """
         env = gym.wrappers.NormalizeReward(env, gamma=gamma)
-        env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
+        # env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
         return env
 
     return thunk
@@ -157,6 +169,94 @@ class Agent(nn.Module):
         return action_mean.detach().cpu().numpy()
 
 
+def save_checkpoint(
+    save_path,
+    agent,
+    optimizer,
+    iteration,
+    global_step,
+    best_episodic_return,
+    args=None,
+    **kwargs,
+):
+    """
+    Save training checkpoint
+
+    Args:
+        save_path: Path to save checkpoint
+        agent: Agent model
+        optimizer: Optimizer
+        iteration: Current iteration
+        global_step: Current global step
+        best_episodic_return: Best episodic return achieved
+        args: Training arguments (optional)
+        **kwargs: Additional information to save
+    """
+    checkpoint = {
+        "iteration": iteration,
+        "global_step": global_step,
+        "model_state_dict": agent.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "best_episodic_return": best_episodic_return,
+    }
+
+    if args is not None:
+        checkpoint["args"] = vars(args) if not isinstance(args, dict) else args
+
+    # Add any additional kwargs
+    checkpoint.update(kwargs)
+
+    torch.save(checkpoint, save_path)
+    logging.info(f"Checkpoint saved to: {save_path}")
+
+    return save_path
+
+
+def load_checkpoint(checkpoint_path, agent, optimizer=None, device="cpu"):
+    """
+    Load training checkpoint
+
+    Args:
+        checkpoint_path: Path to checkpoint file
+        agent: Agent model to load state into
+        optimizer: Optimizer to load state into (optional)
+        device: Device to load tensors to
+
+    Returns:
+        dict: Checkpoint information including iteration, global_step, etc.
+    """
+    if not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+
+    logging.info(f"Loading checkpoint from: {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+
+    # Load model state
+    agent.load_state_dict(checkpoint["model_state_dict"])
+    logging.info("Model state loaded successfully")
+
+    # Load optimizer state if provided
+    if optimizer is not None and "optimizer_state_dict" in checkpoint:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        logging.info("Optimizer state loaded successfully")
+
+    # Extract checkpoint info
+    checkpoint_info = {
+        "iteration": checkpoint.get("iteration", 0),
+        "global_step": checkpoint.get("global_step", 0),
+        "best_episodic_return": checkpoint.get("best_episodic_return", float("-inf")),
+        "args": checkpoint.get("args", None),
+    }
+
+    logging.info(
+        f"Checkpoint info: iteration={checkpoint_info['iteration']}, "
+        f"global_step={checkpoint_info['global_step']}, "
+        f"best_return={checkpoint_info['best_episodic_return']:.2f}"
+    )
+
+    return checkpoint_info
+
+
 def train():
     args = tyro.cli(Args)
     args.batch_size = int(args.num_envs * args.num_steps)
@@ -170,6 +270,8 @@ def train():
 
     setup_logging(args.output_dir)
     logging_args(args)
+
+    logging.info(f"Output directory: {args.output_dir}")
 
     writer = SummaryWriter(args.output_dir)
     writer.add_text(
@@ -185,6 +287,7 @@ def train():
     torch.backends.cudnn.deterministic = args.torch_deterministic
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
+    logging.info(f"Using device: {device}")
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
@@ -196,6 +299,28 @@ def train():
 
     agent = Agent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+
+    num_params = sum(p.numel() for p in agent.parameters())
+    num_trainable_params = sum(p.numel() for p in agent.parameters() if p.requires_grad)
+    logging.info(
+        f"Agent created with {num_params:,} parameters ({num_trainable_params:,} trainable)"
+    )
+
+    # Load checkpoint if resume_from is specified
+    start_iteration = 1
+    start_global_step = 0
+    best_episodic_return = float("-inf")
+    episode_returns = []
+
+    if args.resume_from is not None:
+        checkpoint_info = load_checkpoint(args.resume_from, agent, optimizer, device)
+        start_iteration = checkpoint_info["iteration"] + 1
+        start_global_step = checkpoint_info["global_step"]
+        best_episodic_return = checkpoint_info["best_episodic_return"]
+        logging.info(
+            f"Resuming training from iteration {start_iteration}, global step {start_global_step}"
+        )
+        logging.info(f"Best episodic return so far: {best_episodic_return:.2f}")
 
     # ALGO Logic: Storage setup
     obs = torch.zeros(
@@ -210,13 +335,15 @@ def train():
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
 
     # TRY NOT TO MODIFY: start the game
-    global_step = 0
+    global_step = start_global_step
     start_time = time.time()
     next_obs, _ = envs.reset(seed=args.seed)
     next_obs = torch.Tensor(next_obs).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
 
-    for iteration in tqdm(range(1, args.num_iterations + 1)):
+    logging.info("Starting training loop...")
+
+    for iteration in tqdm(range(start_iteration, args.num_iterations + 1)):
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
             frac = 1.0 - (iteration - 1.0) / args.num_iterations
@@ -245,17 +372,36 @@ def train():
                 next_done
             ).to(device)
 
-            if "final_info" in infos:
-                for info in infos["final_info"]:
-                    if info and "episode" in info:
-                        print(
-                            f"global_step={global_step}, episodic_return={info['episode']['r']}"
+            if "episode" in infos:
+                for i in range(args.num_envs):
+                    episodic_return = infos["episode"]["r"][i]
+                    episodic_length = infos["episode"]["l"][i]
+                    episode_returns.append(episodic_return)
+
+                    writer.add_scalar(
+                        "charts/episodic_return", episodic_return, global_step
+                    )
+                    writer.add_scalar(
+                        "charts/episodic_length", episodic_length, global_step
+                    )
+
+                    # Save best model
+                    if episodic_return > best_episodic_return:
+                        best_episodic_return = episodic_return
+                        best_model_path = os.path.join(
+                            args.output_dir, "best_model.pth"
                         )
-                        writer.add_scalar(
-                            "charts/episodic_return", info["episode"]["r"], global_step
+                        save_checkpoint(
+                            best_model_path,
+                            agent,
+                            optimizer,
+                            iteration,
+                            global_step,
+                            best_episodic_return,
+                            args,
                         )
-                        writer.add_scalar(
-                            "charts/episodic_length", info["episode"]["l"], global_step
+                        logging.info(
+                            f"New best model saved! Return: {best_episodic_return:.2f}"
                         )
 
         # bootstrap value if not done
@@ -363,14 +509,93 @@ def train():
         writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
         writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
         writer.add_scalar("losses/explained_variance", explained_var, global_step)
-        print("SPS:", int(global_step / (time.time() - start_time)))
-        writer.add_scalar(
-            "charts/SPS", int(global_step / (time.time() - start_time)), global_step
-        )
 
-    model_path = os.path.join(args.output_dir, "final.pth")
-    torch.save(agent.state_dict(), model_path)
-    print(f"model saved to {model_path}")
+        sps = int(global_step / (time.time() - start_time))
+        print("SPS:", sps)
+        writer.add_scalar("charts/SPS", sps, global_step)
+
+        # Periodic logging
+        if iteration % args.log_interval == 0:
+            avg_return = (
+                np.mean(episode_returns[-10:]) if len(episode_returns) > 0 else 0
+            )
+            logging.info("=" * 80)
+            logging.info(
+                f"Iteration {iteration}/{args.num_iterations} | Global Step: {global_step:,}"
+            )
+            logging.info(
+                f"  SPS: {sps} | Time Elapsed: {time.time() - start_time:.1f}s"
+            )
+            logging.info(f"  Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
+            logging.info(
+                f"  Policy Loss: {pg_loss.item():.4f} | Value Loss: {v_loss.item():.4f}"
+            )
+            logging.info(
+                f"  Entropy: {entropy_loss.item():.4f} | Approx KL: {approx_kl.item():.4f}"
+            )
+            logging.info(
+                f"  Clip Frac: {np.mean(clipfracs):.4f} | Explained Var: {explained_var:.4f}"
+            )
+            logging.info(
+                f"  Avg Return (last 10 eps): {avg_return:.2f} | Best Return: {best_episodic_return:.2f}"
+            )
+            logging.info("=" * 80)
+
+        # Periodic checkpoint saving
+        if iteration % args.save_interval == 0:
+            checkpoint_path = os.path.join(
+                args.output_dir, f"checkpoint_iter_{iteration}.pth"
+            )
+            save_checkpoint(
+                checkpoint_path,
+                agent,
+                optimizer,
+                iteration,
+                global_step,
+                best_episodic_return,
+                args,
+                episode_returns=episode_returns,
+            )
+
+    # Save final model
+    final_model_path = os.path.join(args.output_dir, "final_model.pth")
+    save_checkpoint(
+        final_model_path,
+        agent,
+        optimizer,
+        args.num_iterations,
+        global_step,
+        best_episodic_return,
+        args,
+        total_episodes=len(episode_returns),
+        episode_returns=episode_returns,
+    )
+
+    # Also save just the model state dict for compatibility
+    legacy_model_path = os.path.join(args.output_dir, "final.pth")
+    torch.save(agent.state_dict(), legacy_model_path)
+
+    total_time = time.time() - start_time
+    logging.info("=" * 80)
+    logging.info("Training completed!")
+    logging.info(f"Total training time: {total_time/3600:.2f} hours")
+    logging.info(f"Total episodes: {len(episode_returns)}")
+    logging.info(f"Best episodic return: {best_episodic_return:.2f}")
+    if len(episode_returns) > 0:
+        logging.info(
+            f"Average return (last 100 eps): {np.mean(episode_returns[-100:]):.2f}"
+        )
+        logging.info(
+            f"Final return (last 10 eps): {np.mean(episode_returns[-10:]):.2f}"
+        )
+    logging.info(f"Final model saved to: {final_model_path}")
+    logging.info(f"Legacy model saved to: {legacy_model_path}")
+    logging.info(
+        f"Best model saved to: {os.path.join(args.output_dir, 'best_model.pth')}"
+    )
+    logging.info("=" * 80)
+
+    print(f"model saved to {final_model_path}")
 
     envs.close()
     writer.close()
@@ -379,6 +604,8 @@ def train():
 def eval():
     path = "runs/HalfCheetah-v4__ppo__1__1762329773/ppo.cleanrl_model"
     path = "runs/Hopper-v4__ppo__1__1762336668/ppo.cleanrl_model"
+    path = "outputs/ppo/Hopper-v4__ppo__2025-11-21-15-29-15/checkpoint_iter_900.pth"
+    path = "outputs/ppo_test/Hopper-v4__ppo__2025-11-27-11-52-16/best_model.pth"
 
     args = Args()
 
@@ -390,19 +617,25 @@ def eval():
     )
 
     agent = Agent(envs)
-    agent.load_state_dict(torch.load(path))
+    info = load_checkpoint(path, agent)
+    print(f"loaded model from {path}, info: {info}")
     agent.eval()
 
     obs, _ = envs.reset()
 
     while True:
         action = agent.act(obs)
-        time.sleep(0.04)
+        # time.sleep(0.04)
         obs, reward, terminations, truncations, infos = envs.step(action)
+        if "episode" in infos:
+            for i in range(args.num_envs):
+                episodic_return = infos["episode"]["r"][i]
+                print(f"episodic_return: {episodic_return:.2f}")
         if terminations[0] or truncations[0]:
             obs, _ = envs.reset()
+            print("env reset")
 
 
 if __name__ == "__main__":
-    train()
-    # eval()
+    # train()
+    eval()

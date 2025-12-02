@@ -6,3 +6,10 @@ supervised_big_data 30000 data
 
 理论上 泛化性应该也更好，未验证
 cognition模型也可以层数变深一点，未验证
+
+
+
+
+### TODO
+src/net/jepa_thinking.py
+观察一下运行时的cognition相似度

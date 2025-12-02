@@ -27,6 +27,8 @@ class Thinking(nn.Module):
         self.fc2 = nn.Linear(512, output_dim)
         # self._create_weights()
 
+        self.feal_criterion = nn.CosineSimilarity(dim=1)
+
     def _create_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
