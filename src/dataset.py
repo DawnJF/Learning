@@ -8,9 +8,8 @@ from typing import Optional, Tuple, Any
 
 
 class HDF5DataSaver:
-    def __init__(self, filepath: str, model_path: str):
+    def __init__(self, filepath: str):
         self.filepath = filepath
-        self.model_path = model_path
         self.file = None
         self.step_count = 0
         self.datasets = {}
@@ -35,7 +34,6 @@ class HDF5DataSaver:
 
         # Save metadata
         metadata_group = self.file.create_group("metadata")
-        metadata_group.attrs["model_path"] = self.model_path
         metadata_group.attrs["start_time"] = datetime.now().isoformat()
 
         # Create datasets with unlimited size along first dimension
@@ -115,7 +113,7 @@ class HDF5DataSaver:
         # Just add to queue, don't block
         self.data_queue.put((step, observation.copy(), action.copy()))
 
-    def finalize(self, total_steps: int, total_reward: float, final_score: int):
+    def finalize(self, extra_info: Optional[dict] = None):
         """Finalize the file with summary information"""
         # Wait for all queued data to be processed
         self.data_queue.join()
@@ -131,9 +129,9 @@ class HDF5DataSaver:
         if self.file:
             # Add final metadata
             self.file.attrs["end_time"] = datetime.now().isoformat()
-            self.file.attrs["total_steps"] = total_steps
-            self.file.attrs["total_reward"] = total_reward
-            self.file.attrs["final_score"] = final_score
+            if extra_info:
+                for key, value in extra_info.items():
+                    self.file.attrs[key] = value
 
             # Final flush and close
             self.file.flush()
