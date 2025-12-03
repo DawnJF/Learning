@@ -24,7 +24,7 @@ from src.utils import logging_args, setup_logging
 class Args:
     file_name: str = os.path.basename(__file__).split(".")[0]
     """the name of this experiment"""
-    experiment_tag: str = "no_R_normalize"
+    experiment_tag: str = ""
     seed: int = 1
     """seed of the experiment"""
     torch_deterministic: bool = True
@@ -107,7 +107,14 @@ def make_env(env_id, idx, gamma, render=False):
         env = gym.wrappers.ClipAction(env)
         # env = gym.wrappers.NormalizeObservation(env)
         # env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
-        # env = gym.wrappers.NormalizeReward(env, gamma=gamma)
+        """
+        # 12.3
+        PPO 对 NormalizeReward（奖励归一化）非常依赖，甚至是“强依赖”。
+        虽然在理论上，不进行奖励归一化 PPO 也能运行，但在实际工程落地和各种 Gym/MuJoCo 环境的测试中，
+        如果不加 NormalizeReward，PPO 的性能通常会剧烈下降，甚至完全无法收敛。
+        """
+        env = gym.wrappers.NormalizeReward(env, gamma=gamma)
+
         # env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
         return env
 
@@ -611,6 +618,7 @@ def eval():
     path = "outputs/ppo/Hopper-v4__ppo__2025-11-21-15-29-15/checkpoint_iter_900.pth"
     path = "outputs/ppo_test/Hopper-v4__ppo__2025-11-27-11-52-16/best_model.pth"
     path = "outputs/Hopper-v4/ppo/Hopper-v4__ppo__2025-12-03-17-39-07/checkpoint_iter_40.pth"
+    path = "outputs/Hopper-v4/ppo/ppo_25-1203-17-59-32_no_R_normalize/checkpoint_iter_180.pth"
 
     args = Args()
 
