@@ -22,9 +22,9 @@ from src.utils import get_device, logging_args, setup_logging
 
 @dataclass
 class Args:
-    exp_name: str = "q_discount_99"
+    exp_name: str = os.path.basename(__file__).split(".")[0]
     """the name of this experiment"""
-    output_dir: str = "outputs/sac"
+    output_dir: str = "outputs"
     render: bool = False
 
     # Algorithm specific arguments
@@ -182,7 +182,7 @@ def train():
 
     time_str = time.strftime("%Y-%m-%d-%H-%M-%S")
     run_name = f"{args.env_id}__{args.exp_name}__{time_str}"
-    args.output_dir = os.path.join(args.output_dir, run_name)
+    args.output_dir = os.path.join(args.output_dir, args.env_id, run_name)
     os.makedirs(args.output_dir, exist_ok=True)
 
     setup_logging(args.output_dir)

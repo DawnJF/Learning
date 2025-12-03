@@ -22,7 +22,7 @@ from src.utils import logging_args, setup_logging
 
 @dataclass
 class Args:
-    exp_name: str = os.path.basename(__file__)[: -len(".py")]
+    exp_name: str = os.path.basename(__file__).split(".")[0]
     """the name of this experiment"""
     seed: int = 1
     """seed of the experiment"""
@@ -31,7 +31,7 @@ class Args:
     cuda: bool = True
     """if toggled, cuda will be enabled by default"""
 
-    output_dir: str = "outputs/ppo_test"
+    output_dir: str = "outputs"
 
     hf_entity: str = ""
     """the user or org name of the model repository from the Hugging Face Hub"""
@@ -40,7 +40,10 @@ class Args:
     # env_id: str = "HalfCheetah-v4"
     env_id: str = "Hopper-v4"
     """the id of the environment"""
-    total_timesteps: int = 2000000
+    total_timesteps: int = 500000
+    gamma: float = 0.99
+    """the discount factor gamma"""
+
     """total timesteps of the experiments"""
     learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
@@ -50,8 +53,7 @@ class Args:
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
-    gamma: float = 0.999
-    """the discount factor gamma"""
+
     gae_lambda: float = 0.95
     """the lambda for the general advantage estimation"""
     num_minibatches: int = 32
@@ -74,7 +76,7 @@ class Args:
     """the target KL divergence threshold"""
 
     # Checkpoint arguments
-    save_interval: int = 100
+    save_interval: int = 10
     """save checkpoint every N iterations"""
     log_interval: int = 20
     """log training metrics every N iterations"""
@@ -264,8 +266,8 @@ def train():
     args.num_iterations = args.total_timesteps // args.batch_size
 
     time_str = time.strftime("%Y-%m-%d-%H-%M-%S")
-    run_name = f"{args.env_id}__{args.exp_name}__{time_str}"
-    args.output_dir = os.path.join(args.output_dir, run_name)
+    run_name = f"{args.env_id}_{args.exp_name}_{time_str}"
+    args.output_dir = os.path.join(args.output_dir, args.env_id, run_name)
     os.makedirs(args.output_dir, exist_ok=True)
 
     setup_logging(args.output_dir)
@@ -606,6 +608,7 @@ def eval():
     path = "runs/Hopper-v4__ppo__1__1762336668/ppo.cleanrl_model"
     path = "outputs/ppo/Hopper-v4__ppo__2025-11-21-15-29-15/checkpoint_iter_900.pth"
     path = "outputs/ppo_test/Hopper-v4__ppo__2025-11-27-11-52-16/best_model.pth"
+    path = "outputs/Hopper-v4/ppo/Hopper-v4__ppo__2025-12-03-17-39-07/checkpoint_iter_40.pth"
 
     args = Args()
 
