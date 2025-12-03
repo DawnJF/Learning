@@ -22,8 +22,9 @@ from src.utils import get_device, logging_args, setup_logging
 
 @dataclass
 class Args:
-    exp_name: str = os.path.basename(__file__).split(".")[0]
+    file_name: str = os.path.basename(__file__).split(".")[0]
     """the name of this experiment"""
+    experiment_tag: str = ""
     output_dir: str = "outputs"
     render: bool = False
 
@@ -180,9 +181,13 @@ def train():
 
     args = tyro.cli(Args)
 
-    time_str = time.strftime("%Y-%m-%d-%H-%M-%S")
-    run_name = f"{args.env_id}__{args.exp_name}__{time_str}"
-    args.output_dir = os.path.join(args.output_dir, args.env_id, run_name)
+    time_str = time.strftime("%y-%m%d-%H-%M-%S")
+    run_name = f"sac_{time_str}"
+    if args.experiment_tag:
+        run_name += f"_{args.experiment_tag}"
+    args.output_dir = os.path.join(
+        args.output_dir, args.env_id, args.file_name, run_name
+    )
     os.makedirs(args.output_dir, exist_ok=True)
 
     setup_logging(args.output_dir)
@@ -195,6 +200,7 @@ def train():
 
     # env setup
     env = make_env(args.env_id, args.render)
+    logging.info(f"Environment: {env}")
 
     action_space = env.action_space
     observation_space = env.observation_space

@@ -22,8 +22,9 @@ from src.utils import logging_args, setup_logging
 
 @dataclass
 class Args:
-    exp_name: str = os.path.basename(__file__).split(".")[0]
+    file_name: str = os.path.basename(__file__).split(".")[0]
     """the name of this experiment"""
+    experiment_tag: str = "no_R_normalize"
     seed: int = 1
     """seed of the experiment"""
     torch_deterministic: bool = True
@@ -106,10 +107,7 @@ def make_env(env_id, idx, gamma, render=False):
         env = gym.wrappers.ClipAction(env)
         # env = gym.wrappers.NormalizeObservation(env)
         # env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
-        """
-        Hopper-v4 用 NormalizeReward 后曲线特别好, 是reward hack的原因, 一直原地保持直立不动
-        """
-        env = gym.wrappers.NormalizeReward(env, gamma=gamma)
+        # env = gym.wrappers.NormalizeReward(env, gamma=gamma)
         # env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
         return env
 
@@ -265,9 +263,13 @@ def train():
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
 
-    time_str = time.strftime("%Y-%m-%d-%H-%M-%S")
-    run_name = f"{args.env_id}_{args.exp_name}_{time_str}"
-    args.output_dir = os.path.join(args.output_dir, args.env_id, run_name)
+    time_str = time.strftime("%y-%m%d-%H-%M-%S")
+    run_name = f"ppo_{time_str}"
+    if args.experiment_tag:
+        run_name += f"_{args.experiment_tag}"
+    args.output_dir = os.path.join(
+        args.output_dir, args.env_id, args.file_name, run_name
+    )
     os.makedirs(args.output_dir, exist_ok=True)
 
     setup_logging(args.output_dir)
@@ -640,5 +642,5 @@ def eval():
 
 
 if __name__ == "__main__":
-    # train()
-    eval()
+    train()
+    # eval()
