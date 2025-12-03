@@ -38,12 +38,7 @@ class HDF5DataSaver:
 
         # Create datasets with unlimited size along first dimension
         # We'll determine the observation shape from the first data point
-        self.observations_initialized = False
-
-        # Create action dataset (1D integers)
-        self.datasets["actions"] = self.file.create_dataset(
-            "actions", (0,), maxshape=(None,), dtype=np.int32, chunks=True
-        )
+        self.shape_initialized = False
 
         # Create step numbers dataset
         self.datasets["steps"] = self.file.create_dataset(
@@ -76,21 +71,32 @@ class HDF5DataSaver:
 
     def _write_step_data(self, step: int, observation: np.ndarray, action: np.ndarray):
         """Actually write data to HDF5 (runs in background thread)"""
-        if not self.observations_initialized:
+        if not self.shape_initialized:
             # Initialize observations dataset with proper shape
             obs_shape = observation.shape
+
             self.datasets["observations"] = self.file.create_dataset(
                 "observations",
                 (0,) + obs_shape,
                 maxshape=(None,) + obs_shape,
-                dtype=np.float32,
+                dtype=observation.dtype,
                 chunks=True,
             )
-            self.observations_initialized = True
+            action_shape = action.shape
+            self.datasets["actions"] = self.file.create_dataset(
+                "actions",
+                (0,) + action_shape,
+                maxshape=(None,) + action_shape,
+                dtype=action.dtype,
+                chunks=True,
+            )
+            self.shape_initialized = True
 
         # Resize datasets to accommodate new data
         self.datasets["steps"].resize((self.step_count + 1,))
-        self.datasets["actions"].resize((self.step_count + 1,))
+        self.datasets["actions"].resize(
+            (self.step_count + 1,) + self.datasets["actions"].shape[1:]
+        )
         self.datasets["observations"].resize(
             (self.step_count + 1,) + self.datasets["observations"].shape[1:]
         )
@@ -98,9 +104,7 @@ class HDF5DataSaver:
         # Save data
         self.datasets["steps"][self.step_count] = step
         self.datasets["actions"][self.step_count] = action
-        self.datasets["observations"][self.step_count] = observation[
-            0
-        ]  # Remove batch dimension
+        self.datasets["observations"][self.step_count] = observation
 
         self.step_count += 1
 

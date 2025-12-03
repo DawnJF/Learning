@@ -14,6 +14,7 @@ import logging
 from torch.utils.tensorboard import SummaryWriter
 
 sys.path.append(os.getcwd())
+from envs.data_recording_wrapper import DataRecordingWrapper
 from src.sac_policy.low_dimensional import Actor, SoftQNetwork
 from src.buffers import ReplayBuffer
 from src.utils import get_device, logging_args, setup_logging
@@ -66,6 +67,10 @@ class Args:
 def make_env(env_id, render=False):
     env = gym.make(env_id, render_mode="human" if render else None)
     env = gym.wrappers.RecordEpisodeStatistics(env)
+    # env = DataRecordingWrapper(
+    #     env,
+    #     output_dir="outputs/dataset/Hopper-v4/2025-12-03-16-25-33_79999",
+    # )
     return env
 
 
@@ -425,10 +430,8 @@ def test():
 
 
 def test_render():
-    path = "outputs/sac/HalfCheetah-v4__q_discount_999__2025-11-17-10-23-21/checkpoint_99999.pt"
-    path = (
-        "outputs/sac/Hopper-v4__q_discount_999__2025-12-03-16-25-33/checkpoint_79999.pt"
-    )
+
+    path = "outputs/sac/Hopper-v4__099__2025-12-03-16-25-33/checkpoint_79999.pt"
 
     evaluate_agent(path, 2, render=True)
 
