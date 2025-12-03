@@ -21,32 +21,34 @@ from src.utils import get_device, logging_args, setup_logging
 
 @dataclass
 class Args:
-    exp_name: str = "q_discount_999"
+    exp_name: str = "q_discount_99"
     """the name of this experiment"""
     output_dir: str = "outputs/sac"
     render: bool = False
 
     # Algorithm specific arguments
-    env_id: str = "HalfCheetah-v4"
-    # env_id: str = "Hopper-v4"
+    # env_id: str = "HalfCheetah-v4"
+    env_id: str = "Hopper-v4"
     """the environment id of the task"""
     load_checkpoint: str = None
     """path to load checkpoint from"""
     learning_starts: int = 5000
     """timestep to start learning"""
-    total_timesteps: int = 100_000
+    total_timesteps: int = 80_000
     """total timesteps of the experiments"""
-    save_freq: int = 40_000
+    save_freq: int = 10_000
     """frequency to save checkpoints"""
+
+    gamma: float = 0.99
+    """the discount factor gamma"""
 
     buffer_size: int = int(1e6)
     """the replay memory buffer size"""
-    gamma: float = 0.999
-    """the discount factor gamma"""
-    tau: float = 0.005
-    """target smoothing coefficient (default: 0.005)"""
     batch_size: int = 256
     """the batch size of sample from the reply memory"""
+
+    tau: float = 0.005
+    """target smoothing coefficient (default: 0.005)"""
     policy_lr: float = 3e-4
     """the learning rate of the policy network optimizer"""
     q_lr: float = 1e-3
@@ -187,7 +189,7 @@ def train():
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # env setup
-    env = make_env(args.env_id)
+    env = make_env(args.env_id, args.render)
 
     action_space = env.action_space
     observation_space = env.observation_space
@@ -414,11 +416,19 @@ def test():
     path = "outputs/sac/Hopper-v4__q_discount_999__2025-10-27-16-25-52/checkpoint_120000.pt"
     path = "outputs/sac/HalfCheetah-v4__q_discount_999__2025-11-17-10-23-21/checkpoint_99999.pt"
 
+    """
+    # 12.3
+    .....发现0.999其实是 reward hack 了，一直原地不动, 0.99没问题
+
+    """
     evaluate_agent(path, 5)
 
 
 def test_render():
     path = "outputs/sac/HalfCheetah-v4__q_discount_999__2025-11-17-10-23-21/checkpoint_99999.pt"
+    path = (
+        "outputs/sac/Hopper-v4__q_discount_999__2025-12-03-16-25-33/checkpoint_79999.pt"
+    )
 
     evaluate_agent(path, 2, render=True)
 
