@@ -25,8 +25,7 @@ class Args:
     file_name: str = os.path.basename(__file__).split(".")[0]
     """the name of this experiment"""
     experiment_tag: str = ""
-    seed: int = 1
-    """seed of the experiment"""
+
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
@@ -34,22 +33,19 @@ class Args:
 
     output_dir: str = "outputs"
 
-    hf_entity: str = ""
-    """the user or org name of the model repository from the Hugging Face Hub"""
-
     # Algorithm specific arguments
     # env_id: str = "HalfCheetah-v4"
     env_id: str = "Hopper-v4"
     """the id of the environment"""
-    total_timesteps: int = 500000
+    total_timesteps: int = 300000
     gamma: float = 0.99
     """the discount factor gamma"""
+    render: bool = False
 
     """total timesteps of the experiments"""
     learning_rate: float = 3e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 1
-    """the number of parallel game environments"""
+
     num_steps: int = 2048
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
@@ -93,32 +89,25 @@ class Args:
     """the number of iterations (computed in runtime)"""
 
 
-def make_env(env_id, idx, gamma, render=False):
-    def thunk():
-        if render and idx == 0:
-            # env = gym.make(env_id, render_mode="rgb_array")
-            env = gym.make(env_id, render_mode="human")
-        else:
-            env = gym.make(env_id)
-        env = gym.wrappers.FlattenObservation(
-            env
-        )  # deal with dm_control's Dict observation space
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-        env = gym.wrappers.ClipAction(env)
-        # env = gym.wrappers.NormalizeObservation(env)
-        # env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
-        """
-        # 12.3
-        PPO 对 NormalizeReward（奖励归一化）非常依赖，甚至是“强依赖”。
-        虽然在理论上，不进行奖励归一化 PPO 也能运行，但在实际工程落地和各种 Gym/MuJoCo 环境的测试中，
-        如果不加 NormalizeReward，PPO 的性能通常会剧烈下降，甚至完全无法收敛。
-        """
-        env = gym.wrappers.NormalizeReward(env, gamma=gamma)
-
-        # env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
-        return env
-
-    return thunk
+def make_env(env_id, gamma, render=False):
+    if render:
+        env = gym.make(env_id, render_mode="human")
+    else:
+        env = gym.make(env_id)
+    # deal with dm_control's Dict observation space
+    env = gym.wrappers.FlattenObservation(env)
+    env = gym.wrappers.RecordEpisodeStatistics(env)
+    env = gym.wrappers.ClipAction(env)
+    # env = gym.wrappers.NormalizeObservation(env)
+    # env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
+    """
+    # 12.3
+    PPO 对 NormalizeReward（奖励归一化）非常依赖，甚至是强依赖。
+    虽然在理论上，不进行奖励归一化 PPO 也能运行，但在实际工程落地和各种 Gym/MuJoCo 环境的测试中，
+    如果不加 NormalizeReward，PPO 的性能通常会剧烈下降，甚至完全无法收敛。
+    """
+    env = gym.wrappers.NormalizeReward(env, gamma=gamma)
+    return env
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -128,31 +117,23 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class Agent(nn.Module):
-    def __init__(self, envs):
+    def __init__(self, observation_space, action_space):
         super().__init__()
         self.critic = nn.Sequential(
-            layer_init(
-                nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)
-            ),
+            layer_init(nn.Linear(np.array(observation_space.shape).prod(), 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 1), std=1.0),
         )
         self.actor_mean = nn.Sequential(
-            layer_init(
-                nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)
-            ),
+            layer_init(nn.Linear(np.array(observation_space.shape).prod(), 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
-            layer_init(
-                nn.Linear(64, np.prod(envs.single_action_space.shape)), std=0.01
-            ),
+            layer_init(nn.Linear(64, np.prod(action_space.shape)), std=0.01),
         )
-        self.actor_logstd = nn.Parameter(
-            torch.zeros(1, np.prod(envs.single_action_space.shape))
-        )
+        self.actor_logstd = nn.Parameter(torch.zeros(1, np.prod(action_space.shape)))
 
     def get_value(self, x):
         return self.critic(x)
@@ -266,7 +247,7 @@ def load_checkpoint(checkpoint_path, agent, optimizer=None, device="cpu"):
 
 def train():
     args = tyro.cli(Args)
-    args.batch_size = int(args.num_envs * args.num_steps)
+    args.batch_size = int(args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
 
@@ -291,24 +272,17 @@ def train():
         % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
     )
 
-    # TRY NOT TO MODIFY: seeding
-    random.seed(args.seed)
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-    torch.backends.cudnn.deterministic = args.torch_deterministic
-
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
     logging.info(f"Using device: {device}")
 
     # env setup
-    envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, i, args.gamma) for i in range(args.num_envs)]
-    )
+    env = make_env(args.env_id, args.gamma, args.render)
+    logging.info(f"Environment: {env}")
     assert isinstance(
-        envs.single_action_space, gym.spaces.Box
+        env.action_space, gym.spaces.Box
     ), "only continuous action space is supported"
 
-    agent = Agent(envs).to(device)
+    agent = Agent(env.observation_space, env.action_space).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
 
     num_params = sum(p.numel() for p in agent.parameters())
@@ -334,23 +308,19 @@ def train():
         logging.info(f"Best episodic return so far: {best_episodic_return:.2f}")
 
     # ALGO Logic: Storage setup
-    obs = torch.zeros(
-        (args.num_steps, args.num_envs) + envs.single_observation_space.shape
-    ).to(device)
-    actions = torch.zeros(
-        (args.num_steps, args.num_envs) + envs.single_action_space.shape
-    ).to(device)
-    logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
-    values = torch.zeros((args.num_steps, args.num_envs)).to(device)
+    obs = torch.zeros((args.num_steps,) + env.observation_space.shape).to(device)
+    actions = torch.zeros((args.num_steps,) + env.action_space.shape).to(device)
+    logprobs = torch.zeros((args.num_steps,)).to(device)
+    rewards = torch.zeros((args.num_steps,)).to(device)
+    terminateds = torch.zeros((args.num_steps,)).to(device)
+    values = torch.zeros((args.num_steps,)).to(device)
 
     # TRY NOT TO MODIFY: start the game
     global_step = start_global_step
     start_time = time.time()
-    next_obs, _ = envs.reset(seed=args.seed)
+    next_obs, _ = env.reset()
     next_obs = torch.Tensor(next_obs).to(device)
-    next_done = torch.zeros(args.num_envs).to(device)
+    last_terminated = False
 
     logging.info("Starting training loop...")
 
@@ -362,31 +332,32 @@ def train():
             optimizer.param_groups[0]["lr"] = lrnow
 
         for step in range(0, args.num_steps):
-            global_step += args.num_envs
+            global_step += 1
             obs[step] = next_obs
-            dones[step] = next_done
 
             # ALGO LOGIC: action logic
             with torch.no_grad():
-                action, logprob, _, value = agent.get_action_and_value(next_obs)
+                action, logprob, _, value = agent.get_action_and_value(
+                    next_obs.unsqueeze(0)
+                )
                 values[step] = value.flatten()
-            actions[step] = action
+            actions[step] = action.squeeze(0)
             logprobs[step] = logprob
 
             # TRY NOT TO MODIFY: execute the game and log data.
-            next_obs, reward, terminations, truncations, infos = envs.step(
-                action.cpu().numpy()
+            next_obs, reward, terminated, truncated, info = env.step(
+                action.squeeze(0).cpu().numpy()
             )
-            next_done = np.logical_or(terminations, truncations)
-            rewards[step] = torch.tensor(reward).to(device).view(-1)
-            next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(
-                next_done
-            ).to(device)
+            last_terminated = terminated
+            done = terminated or truncated
+            rewards[step] = torch.tensor(reward).to(device)
+            terminateds[step] = torch.tensor(terminated).to(device)
+            next_obs = torch.Tensor(next_obs).to(device)
 
-            if "episode" in infos:
-                for i in range(args.num_envs):
-                    episodic_return = infos["episode"]["r"][i]
-                    episodic_length = infos["episode"]["l"][i]
+            if done:
+                if "episode" in info:
+                    episodic_return = info["episode"]["r"]
+                    episodic_length = info["episode"]["l"]
                     episode_returns.append(episodic_return)
 
                     writer.add_scalar(
@@ -415,17 +386,21 @@ def train():
                             f"New best model saved! Return: {best_episodic_return:.2f}"
                         )
 
+                # Reset environment after episode ends
+                next_obs, _ = env.reset()
+                next_obs = torch.Tensor(next_obs).to(device)
+
         # bootstrap value if not done
         with torch.no_grad():
-            next_value = agent.get_value(next_obs).reshape(1, -1)
+            next_value = agent.get_value(next_obs.unsqueeze(0)).reshape(1, -1)
             advantages = torch.zeros_like(rewards).to(device)
             lastgaelam = 0
             for t in reversed(range(args.num_steps)):
                 if t == args.num_steps - 1:
-                    nextnonterminal = 1.0 - next_done
+                    nextnonterminal = 1.0 - float(last_terminated)
                     nextvalues = next_value
                 else:
-                    nextnonterminal = 1.0 - dones[t + 1]
+                    nextnonterminal = 1.0 - terminateds[t + 1]
                     nextvalues = values[t + 1]
                 delta = (
                     rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
@@ -436,9 +411,9 @@ def train():
             returns = advantages + values
 
         # flatten the batch
-        b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
+        b_obs = obs.reshape((-1,) + env.observation_space.shape)
         b_logprobs = logprobs.reshape(-1)
-        b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
+        b_actions = actions.reshape((-1,) + env.action_space.shape)
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
@@ -608,7 +583,7 @@ def train():
 
     print(f"model saved to {final_model_path}")
 
-    envs.close()
+    env.close()
     writer.close()
 
 
@@ -618,37 +593,36 @@ def eval():
     path = "outputs/ppo/Hopper-v4__ppo__2025-11-21-15-29-15/checkpoint_iter_900.pth"
     path = "outputs/ppo_test/Hopper-v4__ppo__2025-11-27-11-52-16/best_model.pth"
     path = "outputs/Hopper-v4/ppo/Hopper-v4__ppo__2025-12-03-17-39-07/checkpoint_iter_40.pth"
-    path = "outputs/Hopper-v4/ppo/ppo_25-1203-17-59-32_no_R_normalize/checkpoint_iter_180.pth"
+    path = "outputs/ppo_test/Hopper-v4/ppo/ppo_25-1204-11-57-42/checkpoint_iter_90.pth"
+    # path = "outputs/ppo_test/Hopper-v4/ppo/ppo_25-1204-12-01-02/checkpoint_iter_90.pth"
 
     args = Args()
 
-    envs = gym.vector.SyncVectorEnv(
-        [
-            make_env(args.env_id, i, args.gamma, render=True)
-            for i in range(args.num_envs)
-        ]
-    )
+    env = make_env(args.env_id, args.gamma, render=True)
 
-    agent = Agent(envs)
+    agent = Agent(env.observation_space, env.action_space)
     info = load_checkpoint(path, agent)
     print(f"loaded model from {path}, info: {info}")
     agent.eval()
 
-    obs, _ = envs.reset()
+    obs, _ = env.reset()
 
-    while True:
+    return_list = []
+
+    for time in range(1000):
         action = agent.act(obs)
         # time.sleep(0.04)
-        obs, reward, terminations, truncations, infos = envs.step(action)
-        if "episode" in infos:
-            for i in range(args.num_envs):
-                episodic_return = infos["episode"]["r"][i]
+        obs, reward, terminated, truncated, info = env.step(action)
+        if terminated or truncated:
+            if "episode" in info:
+                episodic_return = info["episode"]["r"]
+                return_list.append(episodic_return)
                 print(f"episodic_return: {episodic_return:.2f}")
-        if terminations[0] or truncations[0]:
-            obs, _ = envs.reset()
+            obs, _ = env.reset()
+            print(f"{time} average return so far: {np.mean(return_list):.2f}")
             print("env reset")
 
 
 if __name__ == "__main__":
-    train()
-    # eval()
+    # train()
+    eval()
